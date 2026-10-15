@@ -9,10 +9,25 @@ $monitor = $null
 function OutputJson($value) {
     [Console]::WriteLine(($value | ConvertTo-Json -Depth 40 -Compress))
 }
+function SafePageUrl([string]$url, [bool]$includePath = $false) {
+    $uri = $null
+    if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri)) { return $null }
+    # Never expose local file paths, data payloads, or opaque/internal URL identifiers.
+    if ($uri.Scheme -notin @('http', 'https')) { return ($uri.Scheme + ':') }
+    $hostName = $uri.IdnHost
+    if ($uri.HostNameType -eq [UriHostNameType]::IPv6) {
+        $hostName = '[' + ([Net.IPAddress]::Parse($uri.DnsSafeHost)).ToString() + ']'
+    }
+    # Build from host/port only: never interpolate UserInfo, Query, or Fragment.
+    $origin = $uri.Scheme + '://' + $hostName
+    if (-not $uri.IsDefaultPort) { $origin += ':' + $uri.Port }
+    if ($includePath) { return ($origin + $uri.AbsolutePath) }
+    return $origin
+}
 function PublicTarget($target) {
-    # Discovery output does not need query parameters or fragments, which can contain tokens.
-    $safeUrl = ([Uri]$target.url).GetLeftPart([UriPartial]::Path)
-    return @{targetId=$target.targetId; title=$target.title; url=$safeUrl}
+    $value = @{targetId=$target.targetId; url=(SafePageUrl $target.url ([bool]$config.details))}
+    if ($config.details) { $value.title = $target.title }
+    return $value
 }
 function CDP($method, $parameters, $sessionId) {
     $script:sequence++; $id = $script:sequence
@@ -85,7 +100,7 @@ try {
     $version = CDP 'Browser.getVersion' @{} $null
     $all = CDP 'Target.getTargets' @{} $null
     $matches = @($all.targetInfos | Where-Object {
-        $_.type -eq 'page' -and ($config.all -or ([Uri]$_.url).GetLeftPart([UriPartial]::Authority) -eq $config.origin)
+        $_.type -eq 'page' -and ($config.all -or (SafePageUrl $_.url) -eq $config.origin)
     })
     $public = @($matches | ForEach-Object {PublicTarget $_})
     if ($config.list) { OutputJson @{tabs=$public; port=$port; browser=$version.product; browserKind=$config.browser; connection=$config.connection}; exit 0 }

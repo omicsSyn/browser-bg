@@ -2,15 +2,13 @@
 
 在 WSL 中后台操作 Windows Vivaldi 和 Google Chrome 的 Codex / Claude Code skill。通过 Windows 原生 CDP 连接、页面焦点模拟和 DOM 交互读取或操作网页，不主动切换 Windows 前台窗口。
 
-当前版本：1.1.3。
+当前版本：1.2.0。
 
 ## 用途
 
 - 在已登录的浏览器中读取网页、填写已授权的内容并获取结果。
 - 将同一段原文交给 Gemini 润色，再与主助手独立生成的版本比较。
 - 在任务期间复用一个连接，并采样前台窗口状态，结束后仅关闭任务连接。
-
-支持 `bb` 作为 skill 调用简称；`c 浏览器`表示 Chrome，`v 浏览器`表示 Vivaldi，大小写和空格不影响含义。命令行参数仍使用 `chrome` 和 `vivaldi`。
 
 ## 环境要求
 
@@ -45,10 +43,6 @@ ln -s "$HOME/.codex/skills/browser-bg/scripts/bridge.py" "$HOME/.local/bin/brows
 ```
 
 命令入口需要 `~/.local/bin` 已在 `PATH` 中，否则继续使用完整脚本路径。
-
-要使新会话稳定识别 `bb`，在自己的全局 `AGENTS.md` 或对应助手规则中加入：
-
-> 在浏览器操作语境中，用户说“bb”“用 bb”或“调用 bb”时，调用 `browser-bg` skill；浏览器简称与连接方式遵循该 skill。其他语境中的 BB 按上下文理解。
 
 ## 浏览器配置
 
@@ -86,7 +80,7 @@ browser-bg serve --browser chrome --origin https://gemini.google.com
 `serve` 成功后返回本次私有 socket 路径。在另一终端或保留服务进程的工具会话中使用该路径：
 
 ```bash
-browser-bg eval --socket <socket路径> --expression '({title:document.title,origin:location.origin})'
+browser-bg eval --socket <socket路径> --expression '({origin:location.origin,readyState:document.readyState})'
 browser-bg status --socket <socket路径>
 browser-bg close --socket <socket路径>
 ```
@@ -95,14 +89,24 @@ browser-bg close --socket <socket路径>
 
 ## 结果与边界
 
-- `tabs` 返回标签页 ID、标题和去除查询参数及片段的 URL。
-- `serve` 保持连接并返回 socket；`eval` 执行已授权的页面 JavaScript，长表达式可用 `--file` 传入。
+- `tabs` 默认返回标签页 ID 和域名，不返回标题或网址路径。确需区分同域页面时，可在授权范围内使用 `tabs --details`；它额外返回标题及去除认证信息、查询参数和片段的路径，仍可能包含私人内容。非 HTTP(S) 地址只显示协议名。
+- `serve` 保持连接并返回 socket，默认仅显示页面域名；`--details` 可额外显示去认证路径。`eval` 执行已授权的页面 JavaScript，长表达式可用 `--file` 传入。元数据脱敏不适用于任意 `eval` 返回值；只读取本次任务必需的信息，输出及异常可能进入终端或助手会话记录。
 - `status` / `close` 返回前台采样计数；采样不能证明两个采样点之间绝无窗口变化，用户自己切换窗口也会计入。
 - `close` 关闭焦点模拟和任务连接，保留浏览器与标签页。任务结束后应确认服务进程退出。
 - 调试连接具有较强的浏览器控制能力，只允许回环监听，不开放公网、不转发端口、不自动点击授权提示。页面表达式不是安全沙箱，连接能力不扩大用户的操作授权。
-- 原开发环境验证了 Vivaldi 最小化状态下的 Gemini 交互。Chrome 155.0.8059.40 的现有个人配置也已在真实最小化窗口中通过基本 DOM 输入、点击和读回补测；原生授权完成后的测试阶段共 52 次采样，前台窗口变化、浏览器前台及非最小化计数均为 0。授权阶段曾短暂进入前台，单独记录。Chrome 补测使用临时本地控件，尚未覆盖 Gemini 发送与回复读回的端到端流程。
+- 浏览器兼容版本、已验证功能和未覆盖范围统一见 [SKILL.md](SKILL.md#兼容性与测试范围)。
 
-完整操作、Gemini 比较流程、失败处理和版本验证范围见 [SKILL.md](SKILL.md)。本仓库发布通用说明，不包含原开发机器的路径、快捷方式备份、登录数据或私人页面记录。
+完整操作、Gemini 比较流程、失败处理和版本验证范围见 [SKILL.md](SKILL.md)。本仓库发布通用说明。个人简称、机器配置、日志、截图、快捷方式备份和登录数据应保留在本地，不提交到仓库。
+
+## 隐私回归测试
+
+以下测试仅使用虚构数据，不连接浏览器，也不读取登录信息：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+```
+
+完整测试需要 WSL 可调用的 Windows PowerShell，以及用于检查 JavaScript 示例的 Node.js；缺少对应环境时，相应测试会显示为跳过。Node.js 仅用于测试，不是运行 skill 的依赖。
 
 ## 许可证
 

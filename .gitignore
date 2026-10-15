@@ -4,3 +4,19 @@ __pycache__/
 .env
 .env.*
 *.sock
+
+# Local runtime and browser data; keep test fixtures and source files tracked.
+*.log
+*.log.*
+*.har
+*.trace
+logs/
+runtime/
+screenshots/
+recordings/
+profiles/
+browser-data/
+user-data/
+User Data/
+backups/
+.local/

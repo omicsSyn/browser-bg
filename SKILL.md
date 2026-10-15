@@ -1,20 +1,12 @@
 ---
 name: browser-bg
 license: MIT
-description: 在 WSL 中后台操作 Windows Vivaldi 或 Chrome 网页，保持 Windows 前台窗口不变。调用简称 bb；适用于浏览器后台操作、让 Gemini 同时润色并比较等请求，支持固定 CDP 端口及浏览器授权连接。
+description: 在 WSL 中后台操作 Windows Vivaldi 或 Chrome 网页，保持 Windows 前台窗口不变。适用于浏览器后台操作、让 Gemini 同时润色并比较等请求，支持固定 CDP 端口及浏览器授权连接。
 metadata:
-  version: "1.1.3"
+  version: "1.2.0"
 ---
 
 # 浏览器后台操作
-
-## 浏览器简称
-
-- 在调用本 skill 或讨论浏览器操作时，`c浏览器`、`c 浏览器`、`C浏览器`、`C 浏览器`均指 Google Chrome，执行命令时转换为 `--browser chrome`。
-- 在同一语境中，`v浏览器`、`v 浏览器`、`V浏览器`、`V 浏览器`均指 Vivaldi，执行命令时转换为 `--browser vivaldi`。
-- 例如，“用 bb 调用 c 浏览器”选择 Chrome；“用 bb 调用 v 浏览器”选择 Vivaldi。若当前上下文已明确是在选择浏览器，单独的 `c` 或 `v` 也按上述对应关系理解；其他语境中的字母不触发浏览器操作。
-- 用户明确指定的简称与完整浏览器名称具有相同优先级。目标浏览器未运行、连接失败或需要授权时，按该浏览器的流程处理，不自动换用另一浏览器。未指定浏览器时仍默认使用 Vivaldi。
-- 简称用于理解对话指令，命令行 `--browser` 参数仍使用 `chrome` 或 `vivaldi`；浏览器选择不改变本次网页操作授权范围。
 
 ## 运行环境与配置
 
@@ -34,7 +26,6 @@ metadata:
 - 固定端口：`--browser chrome --connection fixed --port 9228`。Chrome 136 起要求非默认的 `--user-data-dir`，仅向日常 Chrome 快捷方式加固定端口无法实现与 Vivaldi 相同的效果。使用该模式前须明确选择独立配置，并由用户完成登录；不复制个人配置、Cookie 或账户文件来替代登录，不关闭 Chrome 的相关保护。
 - `--port` 只用于固定模式。授权模式从实时文件发现端口，不接受指定端口，避免连接错误的实例。连接会校验端口监听地址及进程名称与 `--browser` 一致。
 - 使用本 skill 本身不等于授权重启 Chrome、改动其日常快捷方式或对其网页提交内容。现有登录窗口的连接验证与固定模式的独立测试分别记录，不混称为已完成永久免授权配置。
-- 已有专业工作流仍由其原有规则决定操作权限；这个通用连接入口不替代草稿保存、正式提交、审批和支付限制。
 
 ## 连接与退出
 
@@ -50,17 +41,19 @@ Chrome 使用相同命令，并在 `tabs` 或 `serve` 后加 `--browser chrome`�
 `serve` 保持运行，输出本次私有 Unix socket 路径。用工具的后台进程会话保留它，不要启动后立即终止。一个任务复用同一连接；每次请求不重新连接。
 
 ```bash
-browser-bg eval --socket <本次socket> --expression '({url:location.href,title:document.title})'
+browser-bg eval --socket <本次socket> --expression '({origin:location.origin,readyState:document.readyState})'
 browser-bg eval --socket <本次socket> --file /tmp/task-expression.js
 browser-bg status --socket <本次socket>
 browser-bg close --socket <本次socket>
 ```
 
-默认只匹配 `https://gemini.google.com`；其他已获授权的网站使用精确 `--origin https://目标域名`。多个匹配标签页时，根据用户指定内容和标题/URL选定本次目标，传入 `--target`。无法确定时询问用户。没有目标页时先说明需要打开相应网站；不要使用不相关页面。
+默认只匹配 `https://gemini.google.com`；其他已获授权的网站使用精确 `--origin https://目标域名`。多个匹配标签页时，优先根据用户给定的目标和标签页 ID 选择；确需标题或路径时按下述最小读取规则选定本次目标，传入 `--target`。无法确定时询问用户。没有目标页时先说明需要打开相应网站；不要使用不相关页面。
 
 脚本检查端口只监听回环地址、进程属于选定浏览器。固定模式从 `/json/version` 动态获取 WebSocket，授权模式读取浏览器本次 `DevToolsActivePort`；不缓存旧 UUID、targetId、PID、窗口句柄或 sessionId。它只连接已有标签页，不自动提交任何网页内容。
 
-标签页发现和连接就绪信息中的 URL 自动省略查询参数及片段，避免把链接中的令牌打印出来。执行页面表达式时也只读取完成任务所需的字段；普通连接验证使用标题与 origin，不输出 Cookie、存储或完整带参数 URL。
+连接元数据默认只返回标签页 ID 和不含认证信息的域名（`url` 字段），不返回标题、路径、查询参数或片段。确需区分同域标签页时，才在已授权的范围内使用 `tabs --details`；它会额外返回标题及去除认证信息、查询参数和片段后的路径，标题和路径本身仍可能敏感。`serve --details` 会保留已选页面的去认证路径；错误中的候选列表遵循相同选择。非 HTTP(S) 地址只返回协议名，不暴露本地文件路径或内嵌数据；无法解析的地址返回空值。
+
+此过滤仅作用于连接元数据，不会自动净化 `eval` 返回的正文或异常。普通连接验证只读取 origin 和就绪状态，不输出 Cookie、存储、草稿、完整网址或无关页面内容。工具输出可能进入终端或助手会话记录，不应把这些记录提交到公开仓库。
 
 连接后自动执行 `Emulation.setFocusEmulationEnabled(true)`。这是后台网页交互能够生效的关键，不会主动调用 Windows 窗口激活。页面脚本每次执行前核对 origin；这不是安全沙箱，调用者仍须遵守用户授权范围。
 
@@ -68,34 +61,34 @@ browser-bg close --socket <本次socket>
 
 ## Gemini 双模型润色
 
-1. 确认本次原文及要求。用户明确要求交给 Gemini 即可发送，不重复确认；只发送必要原文与要求，不发送无关聊天、患者标识或本地文件。没有原文且用户要求测试时，使用明确标注的无敏感信息示例。
+1. 确认本次原文及要求。用户明确要求交给 Gemini 即可发送，不重复确认；只发送必要原文与要求，不发送无关聊天、个人身份信息或本地文件。没有原文且用户要求测试时，使用明确标注的无敏感信息示例。
 2. 先独立写出主助手版本并保留，然后给 Gemini 相同原文及要求；不要把主助手版本作为提示，避免互相影响。
-3. 先读取当前页面状态、编辑框草稿和生成状态。不要覆盖已有草稿或打断正在生成的回复。必要时请用户处理该状态。
+3. 先读取当前页面状态、草稿是否为空和生成状态，不返回已有草稿正文。不要覆盖已有草稿或打断正在生成的回复。必要时请用户处理该状态。
 4. 若现有对话并非用户指定的续聊对象，使用网页内“New chat/新对话”入口创建独立对话，并验证已进入空白对话。不要把测试内容写入原有正式对话。
-5. 在页面焦点模拟已启用后，用网页 DOM 交互填写并发送一次。查看实际 DOM 后选择元素，不照抄失效的名称或坐标。
-6. 验证用户消息确实出现、Gemini 回复非空、停止生成按钮消失，并在稍后一次只读查询中确认回复文本稳定。记录实际对话 URL 和页面显示的模式名称，不凭页面标签猜测底层模型版本。
+5. 确认目标对话空闲后，先记录 queryCount 和 replyCount；再在页面焦点模拟已启用的情况下，用网页 DOM 交互填写并发送一次。查看实际 DOM 后选择元素，不照抄失效的名称或坐标。
+6. 发送后确认新增用户消息属于本次任务、页面没有切换，再只读取本次新增的 model-response 节点正文；不要批量读取历史消息。遇到计数异常、页面重载或无法确认消息归属时停止读取，不以“最后一条回复”代替归属核验。确认回复非空、停止生成按钮消失，并在稍后一次只读查询中确认本次回复文本稳定。记录页面显示的模式名称，不猜测底层模型版本。仅当用户需要定位对话时另行读取去认证信息、查询参数和片段的链接，其路径仍可能包含对话标识，不写入公开记录。
 7. 比较忠实性、事实与限定条件、清晰度和简洁度；展示两个真实版本及推荐版本，不把代理生成的内容冒充 Gemini 网页回复。
 8. 检查前台采样，关闭连接；将页面中的测试对话保留供用户核对，不擅自删除历史。
 
-2026-10-15 在当前页面验证过的选择器（必须按实际页面复核）：
+以下选择器须按实际页面复核；发送前保存返回的计数，后续只读取经确认属于本次任务的新增回复：
 
 ```javascript
-// 读取状态，限制返回必要内容。
+// 发送前只读取状态与数量，不返回已有草稿或历史消息正文。
 ({
-  url: location.href,
-  draft: document.querySelector('[contenteditable="true"][role="textbox"]')?.innerText,
-  queries: [...document.querySelectorAll('user-query')].map(e => e.innerText),
-  replies: [...document.querySelectorAll('model-response .markdown')].map(e => e.innerText),
+  origin: location.origin,
+  hasDraft: !!document.querySelector('[contenteditable="true"][role="textbox"]')?.innerText.trim(),
+  queryCount: document.querySelectorAll('user-query').length,
+  replyCount: document.querySelectorAll('model-response').length,
   mode: document.querySelector('[data-test-id="bard-mode-menu-button"]')?.innerText,
   generating: [...document.querySelectorAll('button')].some(e =>
     /Stop response|Stop generating|停止生成|停止回答/i.test(e.getAttribute('aria-label') || ''))
 })
 ```
 
-- 新对话：读取 `a` 的文本与 href，定位 `New chat` 且 href 为账户对应 `/app` 的入口，调用 `.click()`；随后重新读取页面验证。
+- 新对话：仅定位并返回文本为 `New chat` 且 href 为账户对应 `/app` 的入口，不输出侧栏历史对话标题或链接；调用 `.click()` 后重新读取状态验证。
 - 编辑框：`[contenteditable="true"][role="textbox"]`，曾显示 `Enter a prompt for Gemini`。先验证空白，再 `focus({preventScroll:true})`，用 `document.execCommand('insertText', false, prompt)` 触发编辑器更新。只在确认是本任务自己的草稿时才允许替换。原文通过 JSON 编码传入脚本，避免 shell 引号插值。
 - 发送按钮：`button[aria-label="Send message"]`。发送前核对编辑框内容与目标提示词的规范化文本一致、按钮可用、没有正在生成的回答。点击一次后以消息列表确认结果。
-- 回复容器：`model-response .markdown`。内容可能分段生成，不能仅因容器存在就判定完成。
+- 回复容器：先定位经上述归属核验的单个 `model-response`，仅在该节点内合并 `.markdown` 文本；不遍历页面上的全部回复正文。内容可能分段生成，不能仅因容器存在就判定完成。
 - 长提示词优先存入临时 JS 文件后用 `--file`，避免命令行、PTY 长度或换行造成截断。ASCII JSON 经 stdin 管道传输，回复使用 UTF-8。
 
 ## 后台行为与失败处理
@@ -108,15 +101,11 @@ browser-bg close --socket <本次socket>
 - 若固定模式的 `/json/version` 返回 404，但 `DevToolsActivePort` 存在，可能仍在使用逐次授权模式。不要循环连接或自动点击“允许”；检查所选浏览器和连接方式。授权模式直接使用文件中的 WebSocket 路径，不把该 HTTP 404 判为浏览器未启动。永久固定端口设置的适用范围是已配置的启动入口，浏览器升级改写快捷方式后应复查。
 - 登录、验证码和网站访问限制由用户正常完成，不绕过。
 
-## 已验证范围
+## 兼容性与测试范围
 
-以下记录来自原开发环境（2026-10-15），不代表已经在其他机器或所有浏览器版本上测试。
-
-- Vivaldi 8.2.4133.80：在用户现有配置中完成 Gemini 新对话、填写、发送和读回；已启用页面焦点模拟。分阶段测试中，浏览器前台及非最小化采样数均为 0。正常重启并核实固定端口参数后，多次新连接无需再次点击授权。启用焦点模拟之前的失败尝试不算后台成功证据。
-- Chrome 155.0.8059.40：此前已验证现有个人配置的授权连接和连续读页。1.1.3 补测中，在同一个人配置的真实最小化窗口内，通过临时 `about:blank` iframe 完成中文及 Unicode 输入、一次按钮点击和独立读回；输入事件触发 1 次，点击计数为 1，输出与输入一致。临时控件已移除，连接已退出，未向网站提交内容。
-- Chrome 原生授权期间曾短暂进入前台。完成授权并返回原前台窗口后，使用同一采样实现重新记录操作阶段：52 次采样中，浏览器前台、前台窗口变化和浏览器非最小化计数均为 0。该补测支持当前配置的基本 DOM 交互可以在最小化状态完成，不等于所有网站均已验证；Chrome 上的 Gemini 发送与回复读回尚未进行端到端测试。
-- 两种浏览器的临时独立无窗口配置均通过脚本验证，包括 Unicode 和 DOM 交互；Vivaldi 另验证异步表达式、页面异常返回及后续读取。临时无窗口测试不替代真实窗口的后台行为验证。
-- 浏览器与端口进程不匹配时拒绝连接；授权模式指定固定端口时拒绝参数。任务连接已退出，测试专用浏览器及配置已清理。
-- `bb` 为 skill 调用简称；`c 浏览器`和`v 浏览器`按本 skill 的简称规则选择目标。具体浏览器配置仍须在使用者机器上核实。
+- Vivaldi 8.2.4133.80：已验证最小化状态下的 Gemini 新对话、输入、发送及回复读回。
+- Chrome 155.0.8059.40：已验证授权连接，以及真实最小化窗口内临时控件的输入、点击和读回；尚未验证 Chrome 上的 Gemini 端到端对话流程。
+- 原生授权提示可能使浏览器进入前台；后台交互测试与授权阶段分别判断。前台采样不能证明采样间隙绝无变化。
+- 上述版本是已测试范围，不表示其他版本必然兼容。每台机器仍需核实连接配置和页面选择器。
 
 技术机制参考：[Chromium 远程调试服务实现](https://github.com/chromium/chromium/blob/main/chrome/browser/devtools/remote_debugging_server.cc)、[Chrome DevTools 浏览器自动连接说明](https://developer.chrome.com/docs/devtools/agents/use-cases/auto-connect)、[Chrome 136 起的远程调试参数调整](https://developer.chrome.com/blog/remote-debugging-port)。以本机实际版本验证结果为准。

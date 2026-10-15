@@ -34,6 +34,7 @@ def driver(args):
     settings = json.dumps({"port": args.port, "origin": args.origin,
                            "browser": args.browser, "connection": args.connection,
                            "all": getattr(args, "all", False),
+                           "details": args.details,
                            "target": args.target, "list": args.command == "tabs"})
     prefix = "$config = '" + settings.replace("'", "''") + "' | ConvertFrom-Json\n"
     source = prefix + Path(__file__).resolve().with_name("windows_cdp.ps1").read_text(encoding="utf-8")
@@ -136,6 +137,8 @@ def main():
         item.add_argument("--port", type=int, help="Fixed mode only; defaults to Vivaldi 9227 / Chrome 9228")
         item.add_argument("--origin", default="https://gemini.google.com")
         item.add_argument("--target")
+        item.add_argument("--details", action="store_true",
+                          help="Include page titles and URL paths, which may be private; credentials, query and fragment are removed")
         if command == "tabs":
             item.add_argument("--all", action="store_true", help="List tab metadata across origins; does not attach")
     call = commands.add_parser("eval")
