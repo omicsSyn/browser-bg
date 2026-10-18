@@ -77,13 +77,38 @@ class MetadataPrivacy(unittest.TestCase):
                         bridge.main()
                     args = serve.call_args.args[0]
                     self.assertEqual(args.details, details)
-                    self.assertEqual(args.connection, "approval")
+                    self.assertEqual(args.connection, "fixed")
+                    self.assertEqual(args.port, 9228)
                     with mock.patch.object(bridge.subprocess, "Popen") as popen:
                         bridge.driver(args)
                     encoded = popen.call_args.args[0][-1]
                     first_line = base64.b64decode(encoded).decode("utf-16-le").splitlines()[0]
                     config = json.loads(first_line[len("$config = '"): -len("' | ConvertFrom-Json")])
                     self.assertEqual(config["details"], details)
+
+
+class ConnectionSelection(unittest.TestCase):
+    def test_personal_chrome_requires_explicit_approval_and_discovers_port(self):
+        argv = ["browser-bg", "tabs", "--browser", "chrome", "--connection", "approval"]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(bridge, "serve") as serve:
+            bridge.main()
+        args = serve.call_args.args[0]
+        self.assertEqual(args.connection, "approval")
+        self.assertIsNone(args.port)
+
+    def test_approval_cannot_silently_connect_to_fixed_port(self):
+        argv = ["browser-bg", "tabs", "--browser", "chrome", "--connection", "approval", "--port", "9228"]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(bridge, "serve") as serve:
+            with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
+                bridge.main()
+        self.assertEqual(raised.exception.code, 2)
+        serve.assert_not_called()
+
+    def test_vivaldi_keeps_its_existing_fixed_port(self):
+        with mock.patch.object(sys, "argv", ["browser-bg", "tabs"]), mock.patch.object(bridge, "serve") as serve:
+            bridge.main()
+        args = serve.call_args.args[0]
+        self.assertEqual((args.browser, args.connection, args.port), ("vivaldi", "fixed", 9227))
 
 
 class GeminiExamplePrivacy(unittest.TestCase):

@@ -133,7 +133,7 @@ def main():
         item = commands.add_parser(command)
         item.add_argument("--browser", choices=("vivaldi", "chrome"), default="vivaldi")
         item.add_argument("--connection", choices=("fixed", "approval"),
-                          help="Default: fixed for Vivaldi, approval for Chrome")
+                          help="Default: fixed; Chrome personal profile requires explicit approval mode")
         item.add_argument("--port", type=int, help="Fixed mode only; defaults to Vivaldi 9227 / Chrome 9228")
         item.add_argument("--origin", default="https://gemini.google.com")
         item.add_argument("--target")
@@ -151,7 +151,7 @@ def main():
     args = parser.parse_args()
     if args.command in ("serve", "tabs"):
         if args.connection is None:
-            args.connection = "fixed" if args.browser == "vivaldi" else "approval"
+            args.connection = "fixed"
         if args.connection == "approval" and args.port is not None:
             parser.error("Approval mode discovers the live port; do not specify --port")
         if args.connection == "fixed" and args.port is None:

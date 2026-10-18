@@ -2,7 +2,9 @@
 
 在 WSL 中后台操作 Windows Vivaldi 和 Google Chrome 的 Codex / Claude Code skill。通过 Windows 原生 CDP 连接、页面焦点模拟和 DOM 交互读取或操作网页，不主动切换 Windows 前台窗口。
 
-当前版本：1.2.0。
+当前版本：1.3.0。
+
+1.3.0 将 Chrome 的默认连接方式改为固定端口 `9228`。沿用日常 Chrome 个人配置的用户需要显式添加 `--connection approval`；Vivaldi 的默认端口 `9227` 不变。
 
 ## 用途
 
@@ -58,9 +60,55 @@ ln -s "$HOME/.codex/skills/browser-bg/scripts/bridge.py" "$HOME/.local/bin/brows
 
 ### Chrome
 
-默认连接用户现有个人配置的授权模式：在 `chrome://inspect/#remote-debugging` 开启远程调试，并由用户在原生提示中点击允许。脚本动态读取当前 `DevToolsActivePort`；新建连接可能再次提示，因此同一任务应复用连接。
+默认使用 Windows 回环地址 `127.0.0.1:9228` 的固定端口。Chrome 136 起，固定端口必须配合非默认的 `--user-data-dir`；仅修改日常默认配置的端口参数不够。独立配置需由用户正常登录，不能复制 Cookie 或账户文件来替代登录。本项目不会自动创建该配置，也不会在固定连接失败后自动切换到个人配置。
 
-显式选择固定模式时，默认端口为 `9228`。Chrome 136 起，固定端口必须配合非默认的 `--user-data-dir`；仅修改日常默认配置的端口参数不够。独立配置需由用户正常登录，不能复制 Cookie 或账户文件来替代登录。本项目不会自动创建该配置。
+#### 设置固定端口和无痕入口
+
+先确认 Chrome 可执行文件的实际位置，并选择一个独立于日常 Chrome 的用户数据目录。以下是通用 Windows PowerShell 示例；它检查常见安装位置，使用当前 Windows 用户的环境变量，不包含开发者的机器路径。确认这些设置后运行：
+
+```powershell
+$chromeExe = Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'
+if (-not (Test-Path -LiteralPath $chromeExe)) {
+    $chromeExe = Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe'
+}
+if (-not (Test-Path -LiteralPath $chromeExe)) {
+    throw 'Chrome not found; set $chromeExe to the actual chrome.exe path.'
+}
+$profileDir = Join-Path $env:LOCALAPPDATA 'BrowserBG\Chrome'
+$browserArgs = @(
+    ('--user-data-dir="{0}"' -f $profileDir),
+    '--remote-debugging-port=9228',
+    '--remote-debugging-address=127.0.0.1',
+    '--incognito', '--new-window',
+    '--no-first-run', '--no-default-browser-check',
+    'about:blank'
+)
+Start-Process -FilePath $chromeExe -ArgumentList $browserArgs
+```
+
+如果同一个独立配置已经在未启用调试的进程中运行，需要经用户同意正常退出该实例，再按示例启动；不要强制结束浏览器。日常 Chrome 使用不同配置，可保持原有状态。
+
+要把上述参数保存在桌面入口，可在同一个 PowerShell 会话中执行以下代码。它只创建新的专用快捷方式，目标文件已存在时停止，不覆盖原有入口：
+
+```powershell
+$shortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BrowserBG Chrome Incognito.lnk'
+if (Test-Path -LiteralPath $shortcutPath) {
+    throw 'Shortcut already exists; inspect it before making changes.'
+}
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $chromeExe
+$shortcut.Arguments = $browserArgs -join ' '
+$shortcut.Save()
+```
+
+启动后，在 Windows PowerShell 中用 `Get-NetTCPConnection -LocalPort 9228 -State Listen` 核实监听仅限回环地址，并核对监听进程的 Chrome 路径、独立配置和启动参数。确认窗口显示无痕标识，再打开本次授权的目标网站。在 WSL 中运行 `browser-bg tabs --browser chrome --all`，返回的 `connection` 应为 `fixed`、`port` 应为 `9228`。
+
+固定入口保留的是启动参数和独立配置目录；全部无痕窗口关闭后，无痕网站会话结束。此方式避免该独立实例逐连接请求远程调试许可，不代表网页登录、验证码或网站权限永久有效。调试端口只允许本机回环监听。
+
+#### 连接日常 Chrome 个人配置
+
+显式使用 `--browser chrome --connection approval`：在 `chrome://inspect/#remote-debugging` 开启远程调试，并由用户在原生提示中点击允许。脚本动态读取当前 `DevToolsActivePort`；新建连接可能再次提示，因此同一任务应复用连接。授权模式不能同时指定 `--port`。
 
 ## 基本使用
 
@@ -73,8 +121,11 @@ browser-bg tabs
 # 选择刚刚查到的标签页并保持连接；此命令持续运行
 browser-bg serve --target <targetId>
 
-# Chrome：已知域名且恰有一个匹配页面时，可直接建立连接
+# Chrome 独立配置：默认固定端口 9228
 browser-bg serve --browser chrome --origin https://gemini.google.com
+
+# 日常 Chrome 个人配置：显式使用浏览器授权连接
+browser-bg serve --browser chrome --connection approval --origin https://gemini.google.com
 ```
 
 `serve` 成功后返回本次私有 socket 路径。在另一终端或保留服务进程的工具会话中使用该路径：

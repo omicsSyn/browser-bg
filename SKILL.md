@@ -3,7 +3,7 @@ name: browser-bg
 license: MIT
 description: 在 WSL 中后台操作 Windows Vivaldi 或 Chrome 网页，保持 Windows 前台窗口不变。适用于浏览器后台操作、让 Gemini 同时润色并比较等请求，支持固定 CDP 端口及浏览器授权连接。
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # 浏览器后台操作
@@ -12,9 +12,9 @@ metadata:
 
 - 本 skill 在 WSL 中运行 Python 3，通过 Windows 自带的 `powershell.exe` 连接 Windows Vivaldi 或 Google Chrome；Python 只使用标准库。需要启用 WSL 的 Windows 程序互操作，并能调用 `Get-NetTCPConnection`。
 - 从本 skill 实际安装目录运行 `python3 scripts/bridge.py`，或按仓库 README 建立 `browser-bg` 命令。不要假定安装路径、Windows 用户名或浏览器可执行文件位置。
-- 默认连接用户现有配置和登录状态，不复制 Cookie。连接前确认目标浏览器已按对应模式开放调试；安装 skill 不会自动修改浏览器启动参数或开启调试。
+- Vivaldi 默认连接用户现有配置；Chrome 默认连接用户已明确配置的独立实例，不复制 Cookie 或个人配置。连接前确认目标浏览器已按对应模式开放调试；安装 skill 不会自动修改浏览器启动参数或开启调试。
 - Vivaldi 默认使用 Windows `127.0.0.1:9227` 固定端口。配置时在用户选定的启动入口添加 `--remote-debugging-port=9227 --remote-debugging-address=127.0.0.1`；修改前备份该入口，启动后核实实际进程参数和监听地址。逐连接授权模式也可显式选用 `--connection approval`。
-- Chrome 默认读取当前个人配置的授权模式端口；显式选用固定模式时默认端口为 `9228`，需要预先建立非默认的用户数据目录，并由用户正常登录。端口默认值不表示该端口已经配置或正在监听。
+- Chrome 默认连接 Windows `127.0.0.1:9228` 固定端口，需要预先建立非默认的用户数据目录，并由用户正常登录。端口默认值不表示该端口已经配置或正在监听；未配置时先说明如何建立独立入口，不自动退回个人配置。通用设置及无痕快捷方式示例见 [README](README.md#设置固定端口和无痕入口)。
 - WSL 的同名回环地址不一定通向 Windows，因此脚本通过 Windows PowerShell 原生 WebSocket 连接。不得为此暴露外网监听或转发调试端口。
 - 如果浏览器已通过其他入口启动且未带参数，不能给现有进程补加参数。先诊断；重启会中断页面，须有当次重启授权。不要强制结束浏览器进程。
 - 调试端口仅限本机；本机其他程序也可通过该端口控制登录会话。不要设置外网监听、端口转发或 `--remote-allow-origins=*`。
@@ -22,10 +22,11 @@ metadata:
 ## Chrome 连接方式
 
 - 用户指定 Chrome 时使用 Chrome；没有指定时继续以已配置固定端口的 Vivaldi 为默认，不因安装多个浏览器而自行切换目标。
-- 现有个人配置：`--browser chrome` 默认使用 `--connection approval`，从 `%LOCALAPPDATA%\Google\Chrome\User Data\DevToolsActivePort` 动态取得端口及 WebSocket 路径。用户需在 `chrome://inspect/#remote-debugging` 开启该实例调试，并在连接提示中点击允许。不要自动点击授权弹窗。连接成功后复用同一个任务连接，避免每次读写重新授权。
-- 固定端口：`--browser chrome --connection fixed --port 9228`。Chrome 136 起要求非默认的 `--user-data-dir`，仅向日常 Chrome 快捷方式加固定端口无法实现与 Vivaldi 相同的效果。使用该模式前须明确选择独立配置，并由用户完成登录；不复制个人配置、Cookie 或账户文件来替代登录，不关闭 Chrome 的相关保护。
+- 默认固定端口：`--browser chrome` 等价于 `--browser chrome --connection fixed --port 9228`。Chrome 136 起要求非默认的 `--user-data-dir`，仅向日常 Chrome 快捷方式加固定端口无法实现与 Vivaldi 相同的效果。使用该模式前须明确选择独立配置，并由用户完成登录；不复制个人配置、Cookie 或账户文件来替代登录，不关闭 Chrome 的相关保护。
+- 无痕入口：在独立配置的启动参数中增加 `--incognito --new-window`。固定端口连接本身不强制无痕模式；只有实际启动并核实无痕窗口，才能报告无痕操作。独立配置和快捷方式可以保留，无痕网站会话不会跨全部无痕窗口关闭后保留。
+- 现有个人配置：显式使用 `--browser chrome --connection approval`，从 `%LOCALAPPDATA%\Google\Chrome\User Data\DevToolsActivePort` 动态取得端口及 WebSocket 路径。用户需在 `chrome://inspect/#remote-debugging` 开启该实例调试，并在连接提示中点击允许。不要自动点击授权弹窗。连接成功后复用同一个任务连接，避免每次读写重新授权。
 - `--port` 只用于固定模式。授权模式从实时文件发现端口，不接受指定端口，避免连接错误的实例。连接会校验端口监听地址及进程名称与 `--browser` 一致。
-- 使用本 skill 本身不等于授权重启 Chrome、改动其日常快捷方式或对其网页提交内容。现有登录窗口的连接验证与固定模式的独立测试分别记录，不混称为已完成永久免授权配置。
+- 使用本 skill 本身不等于授权重启 Chrome、改动其日常快捷方式或对其网页提交内容。免逐次远程调试授权仅适用于已正确配置的固定端口实例，不扩展到日常个人配置或网站登录。现有登录窗口的连接验证与固定模式的独立测试分别记录。
 
 ## 连接与退出
 
@@ -36,7 +37,7 @@ python3 scripts/bridge.py tabs
 python3 scripts/bridge.py serve --target <本次查询得到的targetId>
 ```
 
-Chrome 使用相同命令，并在 `tabs` 或 `serve` 后加 `--browser chrome`。只列出其他域名的标签页元数据时可用 `tabs --browser chrome --all`；默认仍只列 Gemini。授权模式下，列页后退出、再运行 `serve` 可能再次请求允许；已知目标域名且只有一个匹配标签页时直接 `serve --browser chrome --origin https://目标域名`，减少重复授权。多个匹配项必须明确选择，不猜测。
+Chrome 使用相同命令，并在 `tabs` 或 `serve` 后加 `--browser chrome`，默认连接独立实例的固定端口 `9228`。只列出其他域名的标签页元数据时可用 `tabs --browser chrome --all`；默认仍只列 Gemini。日常个人配置须增加 `--connection approval`；此模式下列页后退出、再运行 `serve` 可能再次请求允许。已知目标域名且只有一个匹配标签页时直接 `serve --browser chrome --connection approval --origin https://目标域名`，减少重复授权。多个匹配项必须明确选择，不猜测。
 
 `serve` 保持运行，输出本次私有 Unix socket 路径。用工具的后台进程会话保留它，不要启动后立即终止。一个任务复用同一连接；每次请求不重新连接。
 
@@ -105,6 +106,8 @@ browser-bg close --socket <本次socket>
 
 - Vivaldi 8.2.4133.80：已验证最小化状态下的 Gemini 新对话、输入、发送及回复读回。
 - Chrome 155.0.8059.40：已验证授权连接，以及真实最小化窗口内临时控件的输入、点击和读回；尚未验证 Chrome 上的 Gemini 端到端对话流程。
+- Chrome 155.0.8059.80：已验证独立配置的回环固定端口、无痕窗口标识，以及两次独立固定连接；第二次仅指定 `--browser chrome` 即连接默认端口 `9228`。未据此验证 Windows 重启后的启动、无痕登录状态持久化或该实例的最小化网页写入。
+- 1.3.0 保留原有元数据脱敏与 Gemini 示例隐私测试，并增加 Chrome 显式授权模式、授权模式拒绝固定端口及 Vivaldi 默认端口回归。测试仅使用虚构数据，不读取浏览器登录信息。
 - 原生授权提示可能使浏览器进入前台；后台交互测试与授权阶段分别判断。前台采样不能证明采样间隙绝无变化。
 - 上述版本是已测试范围，不表示其他版本必然兼容。每台机器仍需核实连接配置和页面选择器。
 
