@@ -62,9 +62,9 @@ ln -s "$HOME/.codex/skills/browser-bg/scripts/bridge.py" "$HOME/.local/bin/brows
 
 默认使用 Windows 回环地址 `127.0.0.1:9228` 的固定端口。Chrome 136 起，固定端口必须配合非默认的 `--user-data-dir`；仅修改日常默认配置的端口参数不够。独立配置需由用户正常登录，不能复制 Cookie 或账户文件来替代登录。本项目不会自动创建该配置，也不会在固定连接失败后自动切换到个人配置。
 
-#### 设置固定端口和无痕入口
+#### 设置固定端口和独立入口
 
-先确认 Chrome 可执行文件的实际位置，并选择一个独立于日常 Chrome 的用户数据目录。以下是通用 Windows PowerShell 示例；它检查常见安装位置，使用当前 Windows 用户的环境变量，不包含开发者的机器路径。确认这些设置后运行：
+先确认 Chrome 可执行文件的实际位置，并选择一个独立于日常 Chrome 的用户数据目录。以下是通用 Windows PowerShell 示例；它检查常见安装位置，使用当前 Windows 用户的环境变量，不包含开发者的机器路径。示例使用普通窗口：需要跨窗口保留站点登录状态（例如账单、购买）时使用这种方式。若只需要隐私隔离且不要求登录持久化，可在参数中加入 `--incognito`；全部无痕窗口关闭后，无痕会话结束。确认这些设置后运行：
 
 ```powershell
 $chromeExe = Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'
@@ -79,7 +79,7 @@ $browserArgs = @(
     ('--user-data-dir="{0}"' -f $profileDir),
     '--remote-debugging-port=9228',
     '--remote-debugging-address=127.0.0.1',
-    '--incognito', '--new-window',
+    '--new-window',
     '--no-first-run', '--no-default-browser-check',
     'about:blank'
 )
@@ -91,7 +91,7 @@ Start-Process -FilePath $chromeExe -ArgumentList $browserArgs
 要把上述参数保存在桌面入口，可在同一个 PowerShell 会话中执行以下代码。它只创建新的专用快捷方式，目标文件已存在时停止，不覆盖原有入口：
 
 ```powershell
-$shortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BrowserBG Chrome Incognito.lnk'
+$shortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BrowserBG Chrome.lnk'
 if (Test-Path -LiteralPath $shortcutPath) {
     throw 'Shortcut already exists; inspect it before making changes.'
 }
@@ -102,9 +102,9 @@ $shortcut.Arguments = $browserArgs -join ' '
 $shortcut.Save()
 ```
 
-启动后，在 Windows PowerShell 中用 `Get-NetTCPConnection -LocalPort 9228 -State Listen` 核实监听仅限回环地址，并核对监听进程的 Chrome 路径、独立配置和启动参数。确认窗口显示无痕标识，再打开本次授权的目标网站。在 WSL 中运行 `browser-bg tabs --browser chrome --all`，返回的 `connection` 应为 `fixed`、`port` 应为 `9228`。
+启动后，在 Windows PowerShell 中用 `Get-NetTCPConnection -LocalPort 9228 -State Listen` 核实监听仅限回环地址，并核对监听进程的 Chrome 路径、独立配置和启动参数。确认窗口模式符合预期（仅显式加入 `--incognito` 时才应出现无痕标识），再打开本次授权的目标网站。在 WSL 中运行 `browser-bg tabs --browser chrome --all`，返回的 `connection` 应为 `fixed`、`port` 应为 `9228`。
 
-固定入口保留的是启动参数和独立配置目录；全部无痕窗口关闭后，无痕网站会话结束。此方式避免该独立实例逐连接请求远程调试许可，不代表网页登录、验证码或网站权限永久有效。调试端口只允许本机回环监听。
+固定入口保留的是启动参数和独立配置目录；普通窗口的站点登录状态保存在该独立配置内，无痕模式则在全部无痕窗口关闭后结束会话。此方式避免该独立实例逐连接请求远程调试许可，不代表网页登录、验证码或网站权限永久有效。调试端口只允许本机回环监听。
 
 #### 连接日常 Chrome 个人配置
 
