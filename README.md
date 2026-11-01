@@ -2,9 +2,9 @@
 
 在 WSL 中后台操作 Windows Vivaldi 和 Google Chrome 的 Codex / Claude Code skill。通过 Windows 原生 CDP 连接、页面焦点模拟和 DOM 交互读取或操作网页，不主动切换 Windows 前台窗口。
 
-当前版本：1.3.0。
+当前版本：1.4.0。
 
-1.3.0 将 Chrome 的默认连接方式改为固定端口 `9228`。沿用日常 Chrome 个人配置的用户需要显式添加 `--connection approval`；Vivaldi 的默认端口 `9227` 不变。
+1.4.0 新增 `open`，通过 CDP 创建后台标签页，避免用普通浏览器启动命令打开网址时抢占前台。Chrome 默认固定端口 `9228`，日常个人配置仍须显式使用 `--connection approval`；Vivaldi 默认端口 `9227` 不变。
 
 ## 用途
 
@@ -110,6 +110,26 @@ $shortcut.Save()
 
 显式使用 `--browser chrome --connection approval`：在 `chrome://inspect/#remote-debugging` 开启远程调试，并由用户在原生提示中点击允许。脚本动态读取当前 `DevToolsActivePort`；新建连接可能再次提示，因此同一任务应复用连接。授权模式不能同时指定 `--port`。
 
+## 后台打开网址
+
+浏览器已运行且调试端口可用时，直接创建后台标签页：
+
+```bash
+browser-bg open https://example.com --browser chrome
+```
+
+命令使用 `Target.createTarget(background=true)`，返回新页的 `target`；随后用该 ID 和精确 `--origin` 连接。已有本次目标页时直接复用。不要改用桌面快捷方式、系统默认浏览器或 `Start-Process chrome.exe <URL>` 打开后台网址，这些入口可能激活窗口。Chrome 没有可见窗口时，`open` 请求创建最小化窗口。
+
+`open` 不会自动启动浏览器或猜测配置目录。若已经建立并授权使用上述独立配置，需要后台冷启动，可在前述 PowerShell 配置示例的同一会话中使用：
+
+```powershell
+$backgroundArgs = @($browserArgs | Where-Object { $_ -notin @('--new-window', 'about:blank') })
+$backgroundArgs += '--no-startup-window'
+Start-Process -FilePath $chromeExe -WindowStyle Hidden -ArgumentList $backgroundArgs
+```
+
+确认端口就绪后再运行 `open`。已有实例直接连接，不为后台操作重启或最小化用户现有窗口。同一授权范围内的连接、开页和已授权启动不需重复询问；首次配置、原生授权提示、重启及网页提交仍按实际授权处理。
+
 ## 基本使用
 
 以下示例假定已安装 `browser-bg` 命令。默认只匹配 `https://gemini.google.com`。
@@ -141,8 +161,9 @@ browser-bg close --socket <socket路径>
 ## 结果与边界
 
 - `tabs` 默认返回标签页 ID 和域名，不返回标题或网址路径。确需区分同域页面时，可在授权范围内使用 `tabs --details`；它额外返回标题及去除认证信息、查询参数和片段的路径，仍可能包含私人内容。非 HTTP(S) 地址只显示协议名。
+- `open` 只创建后台页，返回新页 ID 与前台采样计数；默认不返回路径、查询参数或片段。仅接受 HTTP(S) 地址（禁止内嵌账号密码），以及用于检查的 `about:blank`。它不附加页面、不提交网页内容，也不保持服务进程。
 - `serve` 保持连接并返回 socket，默认仅显示页面域名；`--details` 可额外显示去认证路径。`eval` 执行已授权的页面 JavaScript，长表达式可用 `--file` 传入。元数据脱敏不适用于任意 `eval` 返回值；只读取本次任务必需的信息，输出及异常可能进入终端或助手会话记录。
-- `status` / `close` 返回前台采样计数；采样不能证明两个采样点之间绝无窗口变化，用户自己切换窗口也会计入。
+- `open` / `status` / `close` 返回前台采样计数；采样不能证明两个采样点之间绝无窗口变化，用户自己切换窗口也会计入。`open` 的采样从调试连接后开始，不覆盖之前的冷启动阶段。
 - `close` 关闭焦点模拟和任务连接，保留浏览器与标签页。任务结束后应确认服务进程退出。
 - 调试连接具有较强的浏览器控制能力，只允许回环监听，不开放公网、不转发端口、不自动点击授权提示。页面表达式不是安全沙箱，连接能力不扩大用户的操作授权。
 - 浏览器兼容版本、已验证功能和未覆盖范围统一见 [SKILL.md](SKILL.md#兼容性与测试范围)。

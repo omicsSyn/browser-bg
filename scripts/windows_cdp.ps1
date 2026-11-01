@@ -54,6 +54,14 @@ function CDP($method, $parameters, $sessionId) {
         return $answer.result
     } finally { $cancel.Dispose() }
 }
+function OpenBackgroundTarget([string]$url, [bool]$needsWindow) {
+    $parameters = @{url=$url; background=$true}
+    if ($needsWindow) {
+        $parameters.newWindow = $true
+        $parameters.windowState = 'minimized'
+    }
+    return (CDP 'Target.createTarget' $parameters $null)
+}
 try {
     $port = $config.port
     $endpoint = $null
@@ -104,9 +112,6 @@ try {
     })
     $public = @($matches | ForEach-Object {PublicTarget $_})
     if ($config.list) { OutputJson @{tabs=$public; port=$port; browser=$version.product; browserKind=$config.browser; connection=$config.connection}; exit 0 }
-    if ($config.target) { $matches = @($matches | Where-Object {$_.targetId -eq $config.target}) }
-    if ($matches.Count -ne 1) { throw ('Choose exactly one authorized tab using --target: ' + ($public | ConvertTo-Json -Compress)) }
-    $target = $matches[0]
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -138,6 +143,17 @@ public class BrowserFocusMonitor : IDisposable {
 }
 '@
     $monitor = [BrowserFocusMonitor]::new([uint32]$browser.Id, $browser.MainWindowHandle)
+    if ($config.openUrl) {
+        $needsWindow = $config.browser -eq 'chrome' -and $browser.MainWindowHandle -eq [IntPtr]::Zero
+        $created = OpenBackgroundTarget $config.openUrl $needsWindow
+        Start-Sleep -Milliseconds 500
+        OutputJson @{opened=$true; target=$created.targetId; url=(SafePageUrl $config.openUrl ([bool]$config.details));
+            port=$port; browser=$version.product; browserKind=$config.browser; connection=$config.connection; focus=$monitor.Snapshot()}
+        exit 0
+    }
+    if ($config.target) { $matches = @($matches | Where-Object {$_.targetId -eq $config.target}) }
+    if ($matches.Count -ne 1) { throw ('Choose exactly one authorized tab using --target: ' + ($public | ConvertTo-Json -Compress)) }
+    $target = $matches[0]
     $attached = CDP 'Target.attachToTarget' @{targetId=$target.targetId; flatten=$true} $null
     $session = $attached.sessionId
     $null = CDP 'Emulation.setFocusEmulationEnabled' @{enabled=$true} $session

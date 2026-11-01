@@ -111,6 +111,48 @@ class ConnectionSelection(unittest.TestCase):
         self.assertEqual((args.browser, args.connection, args.port), ("vivaldi", "fixed", 9227))
 
 
+class BackgroundOpen(unittest.TestCase):
+    def test_open_routes_authorized_url_without_starting_a_socket_service(self):
+        argv = ["browser-bg", "open", "https://example.invalid/support", "--browser", "chrome"]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(bridge, "serve") as serve:
+            bridge.main()
+        args = serve.call_args.args[0]
+        self.assertEqual((args.command, args.url, args.port), ("open", argv[2], 9228))
+        with mock.patch.object(bridge.subprocess, "Popen") as popen:
+            bridge.driver(args)
+        source = base64.b64decode(popen.call_args.args[0][-1]).decode("utf-16-le")
+        config = json.loads(source.splitlines()[0][len("$config = '"): -len("' | ConvertFrom-Json")])
+        self.assertEqual(config["openUrl"], argv[2])
+
+    def test_open_rejects_unsafe_urls_before_connecting(self):
+        for url in ("file:///C:/private", "javascript:alert(1)", "https://user:secret@example.invalid", "https://[broken"):
+            with self.subTest(url=url), mock.patch.object(sys, "argv", ["browser-bg", "open", url]), \
+                    mock.patch.object(bridge, "serve") as serve, mock.patch("sys.stderr"):
+                with self.assertRaises(SystemExit) as raised:
+                    bridge.main()
+                self.assertEqual(raised.exception.code, 2)
+                serve.assert_not_called()
+
+    @unittest.skipUnless(shutil.which("powershell.exe"), "Requires Windows PowerShell through WSL")
+    def test_real_open_function_always_requests_background_and_minimizes_new_windows(self):
+        source = (ROOT / "scripts/windows_cdp.ps1").read_text(encoding="utf-8")
+        function = source[source.index("function OpenBackgroundTarget("):source.index("\ntry {", source.index("function OpenBackgroundTarget("))]
+        script = (
+            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); $ErrorActionPreference='Stop'\n"
+            "function CDP($method,$parameters,$sessionId) { return @{method=$method;parameters=$parameters} }\n"
+            + function + "\n@((OpenBackgroundTarget 'about:blank' $false),"
+            "(OpenBackgroundTarget 'about:blank' $true)) | ConvertTo-Json -Depth 6 -Compress"
+        )
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                                 base64.b64encode(script.encode("utf-16-le")).decode("ascii")],
+                                capture_output=True, timeout=20, check=True)
+        regular, cold = json.loads(result.stdout.decode("utf-8-sig"))
+        self.assertEqual(regular, {"method": "Target.createTarget", "parameters": {"url": "about:blank", "background": True}})
+        self.assertEqual(cold, {"method": "Target.createTarget", "parameters": {
+            "url": "about:blank", "background": True, "newWindow": True, "windowState": "minimized"}})
+
+
+
 class GeminiExamplePrivacy(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Requires Node.js for the documentation example test")
     def test_status_example_never_returns_draft_or_history_text(self):

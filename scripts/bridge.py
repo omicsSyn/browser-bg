@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import urlsplit
 
 MAX_MESSAGE = 1_048_576
 
@@ -35,7 +36,8 @@ def driver(args):
                            "browser": args.browser, "connection": args.connection,
                            "all": getattr(args, "all", False),
                            "details": args.details,
-                           "target": args.target, "list": args.command == "tabs"})
+                           "target": args.target, "list": args.command == "tabs",
+                           "openUrl": getattr(args, "url", None)})
     prefix = "$config = '" + settings.replace("'", "''") + "' | ConvertFrom-Json\n"
     source = prefix + Path(__file__).resolve().with_name("windows_cdp.ps1").read_text(encoding="utf-8")
     encoded = base64.b64encode(source.encode("utf-16-le")).decode("ascii")
@@ -72,7 +74,7 @@ def serve(args):
         info = json.loads(initial)
         if info.get("error"):
             raise RuntimeError(info["error"])
-        if args.command == "tabs":
+        if args.command in ("tabs", "open"):
             print(json.dumps(info, ensure_ascii=False), flush=True)
             return
         if not info.get("ready"):
@@ -129,7 +131,7 @@ def serve(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("serve", "tabs"):
+    for command in ("serve", "tabs", "open"):
         item = commands.add_parser(command)
         item.add_argument("--browser", choices=("vivaldi", "chrome"), default="vivaldi")
         item.add_argument("--connection", choices=("fixed", "approval"),
@@ -141,6 +143,8 @@ def main():
                           help="Include page titles and URL paths, which may be private; credentials, query and fragment are removed")
         if command == "tabs":
             item.add_argument("--all", action="store_true", help="List tab metadata across origins; does not attach")
+        if command == "open":
+            item.add_argument("url", help="Authorized HTTP(S) URL, or about:blank; opens without activation")
     call = commands.add_parser("eval")
     call.add_argument("--socket", required=True)
     source = call.add_mutually_exclusive_group(required=True)
@@ -149,7 +153,7 @@ def main():
     for command in ("status", "close"):
         commands.add_parser(command).add_argument("--socket", required=True)
     args = parser.parse_args()
-    if args.command in ("serve", "tabs"):
+    if args.command in ("serve", "tabs", "open"):
         if args.connection is None:
             args.connection = "fixed"
         if args.connection == "approval" and args.port is not None:
@@ -158,6 +162,17 @@ def main():
             args.port = 9227 if args.browser == "vivaldi" else 9228
         if args.port is not None and not 1 <= args.port <= 65535:
             parser.error("Port must be 1..65535")
+        if args.command == "open":
+            try:
+                url = urlsplit(args.url)
+                valid = (url.scheme in ("http", "https") and bool(url.hostname)
+                         and url.username is None and url.password is None)
+            except ValueError:
+                valid = False
+            if not valid and args.url != "about:blank":
+                parser.error("Open requires an HTTP(S) URL without embedded credentials, or about:blank")
+            if args.target:
+                parser.error("Open creates a new background tab; do not specify --target")
         serve(args)
         return
     payload = {"op": args.command}
