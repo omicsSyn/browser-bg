@@ -79,7 +79,8 @@ class MetadataPrivacy(unittest.TestCase):
                     self.assertEqual(args.details, details)
                     self.assertEqual(args.connection, "fixed")
                     self.assertEqual(args.port, 9228)
-                    with mock.patch.object(bridge.subprocess, "Popen") as popen:
+                    with mock.patch.object(bridge.subprocess, "check_output", return_value="F:\\FAKE\\windows_cdp.ps1\n"), \
+                            mock.patch.object(bridge.subprocess, "Popen") as popen:
                         bridge.driver(args)
                     encoded = popen.call_args.args[0][-1]
                     first_line = base64.b64decode(encoded).decode("utf-16-le").splitlines()[0]
@@ -118,7 +119,8 @@ class BackgroundOpen(unittest.TestCase):
             bridge.main()
         args = serve.call_args.args[0]
         self.assertEqual((args.command, args.url, args.port), ("open", argv[2], 9228))
-        with mock.patch.object(bridge.subprocess, "Popen") as popen:
+        with mock.patch.object(bridge.subprocess, "check_output", return_value="F:\\FAKE\\windows_cdp.ps1\n"), \
+                mock.patch.object(bridge.subprocess, "Popen") as popen:
             bridge.driver(args)
         source = base64.b64decode(popen.call_args.args[0][-1]).decode("utf-16-le")
         config = json.loads(source.splitlines()[0][len("$config = '"): -len("' | ConvertFrom-Json")])

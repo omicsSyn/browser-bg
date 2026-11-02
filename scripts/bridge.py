@@ -39,7 +39,10 @@ def driver(args):
                            "target": args.target, "list": args.command == "tabs",
                            "openUrl": getattr(args, "url", None)})
     prefix = "$config = '" + settings.replace("'", "''") + "' | ConvertFrom-Json\n"
-    source = prefix + Path(__file__).resolve().with_name("windows_cdp.ps1").read_text(encoding="utf-8")
+    script = Path(__file__).resolve().with_name("windows_cdp.ps1")
+    windows_script = subprocess.check_output(["wslpath", "-w", str(script)], text=True).strip()
+    # Keep the original command-text execution model without embedding the whole file.
+    source = prefix + ". ([scriptblock]::Create([IO.File]::ReadAllText('" + windows_script.replace("'", "''") + "')))\n"
     encoded = base64.b64encode(source.encode("utf-16-le")).decode("ascii")
     return subprocess.Popen(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
@@ -74,7 +77,7 @@ def serve(args):
         info = json.loads(initial)
         if info.get("error"):
             raise RuntimeError(info["error"])
-        if args.command in ("tabs", "open"):
+        if args.command == "tabs" or (args.command == "open" and not info.get("keepAlive")):
             print(json.dumps(info, ensure_ascii=False), flush=True)
             return
         if not info.get("ready"):
@@ -144,7 +147,7 @@ def main():
         if command == "tabs":
             item.add_argument("--all", action="store_true", help="List tab metadata across origins; does not attach")
         if command == "open":
-            item.add_argument("url", help="Authorized HTTP(S) URL, or about:blank; opens without activation")
+            item.add_argument("url", help="Authorized HTTP(S) URL, or about:blank; Vivaldi returns a live socket for a temporary hidden page")
     call = commands.add_parser("eval")
     call.add_argument("--socket", required=True)
     source = call.add_mutually_exclusive_group(required=True)
@@ -173,6 +176,11 @@ def main():
                 parser.error("Open requires an HTTP(S) URL without embedded credentials, or about:blank")
             if args.target:
                 parser.error("Open creates a new background tab; do not specify --target")
+            if args.url != "about:blank":
+                try:
+                    url.port
+                except ValueError:
+                    parser.error("Open requires a valid port")
         serve(args)
         return
     payload = {"op": args.command}

@@ -6,6 +6,7 @@ $w = [Net.WebSockets.ClientWebSocket]::new()
 $script:sequence = 0
 $session = $null
 $monitor = $null
+$ownedHiddenTarget = $null
 function OutputJson($value) {
     [Console]::WriteLine(($value | ConvertTo-Json -Depth 40 -Compress))
 }
@@ -62,6 +63,26 @@ function OpenBackgroundTarget([string]$url, [bool]$needsWindow) {
     }
     return (CDP 'Target.createTarget' $parameters $null)
 }
+function OpenVivaldiBackgroundTarget {
+    # Vivaldi restores minimized windows for ordinary tab creation, including inactive tabs.
+    # A hidden target has no tab-strip entry and lives only as long as this connection.
+    # Do not fall back to ordinary creation if hidden targets are unsupported.
+    return (CDP 'Target.createTarget' @{url='about:blank'; background=$true; hidden=$true} $null)
+}
+function InitializeHiddenPage([string]$url, $sessionId) {
+    # Parse the requested URL in our own blank page, before any site script or redirect.
+    $urlLiteral = $url | ConvertTo-Json -Compress
+    $parsed = CDP 'Runtime.evaluate' @{expression="new URL($urlLiteral).origin"; returnByValue=$true; timeout=5000} $sessionId
+    if ($parsed.exceptionDetails -or $parsed.result.type -ne 'string') { throw 'Cannot determine the authorized URL origin' }
+    $origin = $parsed.result.value
+    if ($url -ne 'about:blank') {
+        if ($origin -notmatch '^https?://') { throw 'Open requires an HTTP(S) origin' }
+        $navigation = CDP 'Page.navigate' @{url=$url} $sessionId
+        if ($navigation.errorText) { throw 'Hidden page navigation failed' }
+    }
+    return $origin
+}
+
 try {
     $port = $config.port
     $endpoint = $null
@@ -144,20 +165,38 @@ public class BrowserFocusMonitor : IDisposable {
 '@
     $monitor = [BrowserFocusMonitor]::new([uint32]$browser.Id, $browser.MainWindowHandle)
     if ($config.openUrl) {
-        $needsWindow = $config.browser -eq 'chrome' -and $browser.MainWindowHandle -eq [IntPtr]::Zero
-        $created = OpenBackgroundTarget $config.openUrl $needsWindow
-        Start-Sleep -Milliseconds 500
-        OutputJson @{opened=$true; target=$created.targetId; url=(SafePageUrl $config.openUrl ([bool]$config.details));
-            port=$port; browser=$version.product; browserKind=$config.browser; connection=$config.connection; focus=$monitor.Snapshot()}
-        exit 0
+        if ($config.browser -eq 'vivaldi') {
+            $created = OpenVivaldiBackgroundTarget
+            $ownedHiddenTarget = $created.targetId
+            $target = @{targetId=$ownedHiddenTarget; url=$config.openUrl}
+        } else {
+            $needsWindow = $browser.MainWindowHandle -eq [IntPtr]::Zero
+            $created = OpenBackgroundTarget $config.openUrl $needsWindow
+            Start-Sleep -Milliseconds 500
+            OutputJson @{opened=$true; target=$created.targetId; url=(SafePageUrl $config.openUrl ([bool]$config.details));
+                port=$port; browser=$version.product; browserKind=$config.browser; connection=$config.connection;
+                openMethod='cdp-background'; focus=$monitor.Snapshot()}
+            exit 0
+        }
+    } else {
+        if ($config.target) { $matches = @($matches | Where-Object {$_.targetId -eq $config.target}) }
+        if ($matches.Count -ne 1) { throw ('Choose exactly one authorized tab using --target: ' + ($public | ConvertTo-Json -Compress)) }
+        $target = $matches[0]
     }
-    if ($config.target) { $matches = @($matches | Where-Object {$_.targetId -eq $config.target}) }
-    if ($matches.Count -ne 1) { throw ('Choose exactly one authorized tab using --target: ' + ($public | ConvertTo-Json -Compress)) }
-    $target = $matches[0]
     $attached = CDP 'Target.attachToTarget' @{targetId=$target.targetId; flatten=$true} $null
     $session = $attached.sessionId
     $null = CDP 'Emulation.setFocusEmulationEnabled' @{enabled=$true} $session
-    OutputJson @{ready=$true; target=$target.targetId; url=(PublicTarget $target).url; browser=$version.product; browserKind=$config.browser; connection=$config.connection; port=$port}
+    if ($ownedHiddenTarget) { $config.origin = InitializeHiddenPage $config.openUrl $session }
+    $ready = @{ready=$true; target=$target.targetId; url=(PublicTarget $target).url; browser=$version.product; browserKind=$config.browser; connection=$config.connection; port=$port}
+    if ($ownedHiddenTarget) {
+        Start-Sleep -Milliseconds 500
+        $ready.opened = $true
+        $ready.keepAlive = $true
+        $ready.openMethod = 'cdp-hidden'
+        $ready.pageLifetime = 'connection'
+        $ready.focus = $monitor.Snapshot()
+    }
+    OutputJson $ready
     while ($true) {
         $line = [Console]::ReadLine()
         if ($null -eq $line) { break }
@@ -186,6 +225,9 @@ public class BrowserFocusMonitor : IDisposable {
             $null = CDP 'Emulation.setFocusEmulationEnabled' @{enabled=$false} $session
             $null = CDP 'Target.detachFromTarget' @{sessionId=$session} $null
         } catch {}
+    }
+    if ($ownedHiddenTarget -and $w.State -eq 'Open') {
+        try { $null = CDP 'Target.closeTarget' @{targetId=$ownedHiddenTarget} $null } catch {}
     }
     if ($monitor) { $monitor.Dispose() }
     $w.Dispose()
