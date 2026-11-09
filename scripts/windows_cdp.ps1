@@ -55,6 +55,14 @@ function CDP($method, $parameters, $sessionId) {
         return $answer.result
     } finally { $cancel.Dispose() }
 }
+function PageInput($request, $sessionId, [string]$expectedOrigin) {
+    if ($request.method -notin @('Input.dispatchMouseEvent','Input.dispatchKeyEvent','Input.insertText','Page.getLayoutMetrics')) {
+        throw 'CDP method is not an allowed page input/layout operation'
+    }
+    $check = CDP 'Runtime.evaluate' @{expression='location.origin'; returnByValue=$true} $sessionId
+    if ($check.result.value -ne $expectedOrigin) { throw 'Authorized tab origin changed' }
+    return (CDP $request.method $request.parameters $sessionId)
+}
 function OpenBackgroundTarget([string]$url, [bool]$needsWindow) {
     $parameters = @{url=$url; background=$true}
     if ($needsWindow) {
@@ -209,6 +217,10 @@ public class BrowserFocusMonitor : IDisposable {
             break
         }
         if ($inputObject.op -eq 'status') { OutputJson @{focus=$monitor.Snapshot()}; continue }
+        if ($inputObject.op -eq 'cdp') {
+            OutputJson (PageInput $inputObject $session $config.origin)
+            continue
+        }
         if ($inputObject.op -ne 'eval') { throw 'Unknown operation' }
         $originLiteral = $config.origin | ConvertTo-Json -Compress
         $expressionLiteral = $inputObject.expression | ConvertTo-Json -Compress

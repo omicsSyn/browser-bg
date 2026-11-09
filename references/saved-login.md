@@ -12,7 +12,7 @@
 
 ## 当前实现范围
 
-`browser-bg` 标准 CLI 只提供连接、开页、页面求值和状态/关闭命令，尚无通用页面鼠标事件命令。不能把 `eval` 中的 `.click()` 描述为已经发送了页面鼠标事件。需要补充页面输入时，复用现有驱动的端口、目标、origin 校验及连接清理，不放宽授权范围，也不修改用户的浏览器安全设置。
+`browser-bg` 1.6.1 起提供受限的 `cdp` 页面输入接口，可通过当前任务的 socket 发送 `Input.dispatchMouseEvent`、`Input.dispatchKeyEvent`、`Input.insertText`，或读取 `Page.getLayoutMetrics`。接口复用附着会话并在操作前检查 origin；它不授予登录、提交或账户修改权限。不能把 `eval` 中的 `.click()` 描述为已经发送了页面鼠标事件，也不为使用输入接口而放宽浏览器安全设置。使用时按当前 DOM 核对目标，不照抄历史坐标。
 
 `navigator.credentials.get()` 无返回或超时不能代替实际登录测试，也不是使用已有自动填充的必需步骤。不要导出、解密或复制浏览器密码库来替代正常登录。
 

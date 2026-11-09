@@ -17,6 +17,20 @@ import time
 from urllib.parse import urlsplit
 
 MAX_MESSAGE = 1_048_576
+INPUT_METHODS = ("Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText",
+                 "Page.getLayoutMetrics")
+
+
+def validate_request(request):
+    if not isinstance(request, dict) or request.get("op") not in ("eval", "status", "close", "cdp"):
+        raise ValueError("Unknown operation")
+    if request["op"] == "eval" and not isinstance(request.get("expression"), str):
+        raise ValueError("expression must be a string")
+    if request["op"] == "cdp":
+        if request.get("method") not in INPUT_METHODS:
+            raise ValueError("CDP method is not an allowed page input/layout operation")
+        if not isinstance(request.get("parameters"), dict):
+            raise ValueError("parameters must be an object")
 
 
 def receive_line(connection):
@@ -100,10 +114,7 @@ def serve(args):
                 payload = receive_line(connection)
                 try:
                     request = json.loads(payload)
-                    if request.get("op") not in ("eval", "status", "close"):
-                        raise ValueError("Unknown operation")
-                    if request["op"] == "eval" and not isinstance(request.get("expression"), str):
-                        raise ValueError("expression must be a string")
+                    validate_request(request)
                 except (KeyError, ValueError, TypeError) as error:
                     connection.sendall((json.dumps({"error": str(error)}) + "\n").encode())
                     continue
@@ -153,6 +164,10 @@ def main():
     source = call.add_mutually_exclusive_group(required=True)
     source.add_argument("--expression")
     source.add_argument("--file", type=Path)
+    native = commands.add_parser("cdp", help="Page input/layout only; uses the attached session and origin")
+    native.add_argument("--socket", required=True)
+    native.add_argument("--method", choices=INPUT_METHODS, required=True)
+    native.add_argument("--params", required=True, help="JSON object of CDP parameters")
     for command in ("status", "close"):
         commands.add_parser(command).add_argument("--socket", required=True)
     args = parser.parse_args()
@@ -186,6 +201,9 @@ def main():
     payload = {"op": args.command}
     if args.command == "eval":
         payload["expression"] = args.file.read_text(encoding="utf-8") if args.file else args.expression
+    if args.command == "cdp":
+        payload.update(method=args.method, parameters=json.loads(args.params))
+    validate_request(payload)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(65)
         connection.connect(args.socket)
