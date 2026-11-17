@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import select
+import signal
 import socket
 import subprocess
 import sys
@@ -56,7 +57,10 @@ def driver(args):
     script = Path(__file__).resolve().with_name("windows_cdp.ps1")
     windows_script = subprocess.check_output(["wslpath", "-w", str(script)], text=True).strip()
     # Keep the original command-text execution model without embedding the whole file.
-    source = prefix + ". ([scriptblock]::Create([IO.File]::ReadAllText('" + windows_script.replace("'", "''") + "')))\n"
+    quoted_script = windows_script.replace("'", "''")
+    source = (prefix
+              + "$browserBgScriptDirectory = [IO.Path]::GetDirectoryName('" + quoted_script + "')\n"
+              + ". ([scriptblock]::Create([IO.File]::ReadAllText('" + quoted_script + "')))\n")
     encoded = base64.b64encode(source.encode("utf-16-le")).decode("ascii")
     return subprocess.Popen(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
@@ -65,6 +69,12 @@ def driver(args):
 
 
 def serve(args):
+    if args.command == "open" and args.browser == "vivaldi":
+        raise ValueError(
+            "VIVALDI_OPEN_REQUIRES_EXISTING_TAB: Automatic new-tab creation may activate "
+            "Vivaldi; hidden pages are disabled. Use tabs then serve --target with an "
+            "authorized normal tab. If none exists, ask the user to open it manually."
+        )
     process = driver(args)
     buffered = bytearray()
 
@@ -90,7 +100,7 @@ def serve(args):
         initial = read_line(timeout=90 if args.connection == "approval" else 60)
         info = json.loads(initial)
         if info.get("error"):
-            raise RuntimeError(info["error"])
+            raise RuntimeError(json.dumps(info, ensure_ascii=False))
         if args.command == "tabs" or (args.command == "open" and not info.get("keepAlive")):
             print(json.dumps(info, ensure_ascii=False), flush=True)
             return
@@ -103,6 +113,7 @@ def serve(args):
         server.listen(1)
         server.settimeout(1800)
         info["socket"] = address
+        info["bridgePid"] = os.getpid()
         print(json.dumps(info, ensure_ascii=False), flush=True)
         while True:
             try:
@@ -158,7 +169,7 @@ def main():
         if command == "tabs":
             item.add_argument("--all", action="store_true", help="List tab metadata across origins; does not attach")
         if command == "open":
-            item.add_argument("url", help="Authorized HTTP(S) URL, or about:blank; Vivaldi returns a live socket for a temporary hidden page")
+            item.add_argument("url", help="Authorized HTTP(S) URL, or about:blank; automatic creation is supported for Chrome only; use serve for existing Vivaldi tabs")
     call = commands.add_parser("eval")
     call.add_argument("--socket", required=True)
     source = call.add_mutually_exclusive_group(required=True)
@@ -215,7 +226,13 @@ def main():
     print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
 
 
+def terminate_connection(signum, frame):
+    # Unwind serve() and close our helper normally; keep the browser and its tabs.
+    raise SystemExit(128 + signum)
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, terminate_connection)
     try:
         main()
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
