@@ -1,10 +1,12 @@
 # browser-bg
 
-在 WSL 中后台操作 Windows Vivaldi 和 Google Chrome 的 Codex / Claude Code skill。通过 Windows 原生 CDP 连接、页面焦点模拟和 DOM 交互读取或操作网页，不主动切换 Windows 前台窗口。
+在 WSL 中后台操作 Windows Vivaldi 和 Google Chrome 的 Codex / Claude Code skill。通过 Windows 原生 CDP 连接、页面焦点模拟和 DOM 交互读取或操作网页，默认保持 Windows 前台窗口不变；Vivaldi 自动新开标签页需单独允许开页时进入前台。
 
-当前版本：1.7.2。
+当前版本：1.8.0。
 
-1.7.2 默认复用正常标签页，移除隐藏页创建路径；Vivaldi 自动新开页因可能恢复最小化窗口而明确暂停，已有目标页继续通过 `serve` 后台操作。新增页面就绪与有界脱敏诊断、连接进程标识和 SIGTERM 清理，并补充功能测试中的模型额度替代、连接复用和发送计时规则。保留公开版 PowerShell 命令文本加载兼容性，不导入任何开发者机器配置。模型替代和精确计时是执行者按 skill 实施的流程，不是常驻自动化服务。
+1.8.0 支持由助手在唯一现有 Vivaldi 窗口新开普通标签页，使用 `--allow-activation` 明确用户已接受开页时可能进入前台；不另建窗口、不自动选取多个窗口。保留既有公开版兼容性和隐私保护。完整使用方式及实测限制见下方“后台打开网址”。
+
+历史版本 1.7.2 默认复用正常标签页，移除隐藏页创建路径；Vivaldi 自动新开页因可能恢复最小化窗口而明确暂停，已有目标页继续通过 `serve` 后台操作。新增页面就绪与有界脱敏诊断、连接进程标识和 SIGTERM 清理，并补充功能测试中的模型额度替代、连接复用和发送计时规则。保留公开版 PowerShell 命令文本加载兼容性，不导入任何开发者机器配置。模型替代和精确计时是执行者按 skill 实施的流程，不是常驻自动化服务。
 
 1.6.1 将 BioRender 作为同一 skill 内按需加载的专项：新增可编辑画布操作指南、基础交互与预览读取辅助脚本，并在共享驱动中加入受限的页面输入接口。保留公开版既有 URL 规范化与 PowerShell 加载兼容性修复。功能与验证边界见 [BioRender 指南](references/biorender.md)；不提供通用一键绘图，不自动导出或改变账户权限。
 
@@ -133,7 +135,13 @@ browser-bg open https://example.com --browser chrome
 
 Chrome 命令使用 `Target.createTarget(background=true)`，返回新页的 `target` 后退出；随后用该 ID 和精确 `--origin` 连接。Chrome 没有可见窗口时，`open` 请求创建最小化窗口。
 
-Vivaldi 默认复用已有正常标签页，不创建隐藏页。已测试版本的新开普通标签页可能恢复最小化窗口，因此 `open --browser vivaldi` 在连接前返回 `VIVALDI_OPEN_REQUIRES_EXISTING_TAB`。先 `tabs` 定位并核对本任务页面，再 `serve --target` 连接；没有可用页时请用户手动打开一次。窗口可以保持后台或最小化状态。
+Vivaldi 优先复用已有任务标签页。需要新页时，由助手在唯一现有窗口创建普通标签页，不另建窗口。当前版本仍可能恢复并激活窗口；用户明确允许这一开页影响后执行：
+
+```bash
+browser-bg open https://example.com --browser vivaldi --allow-activation
+```
+
+没有该项同意时不要添加此参数，命令会在连接前返回 `VIVALDI_OPEN_REQUIRES_ACTIVATION_CONSENT`。没有窗口或存在多个窗口时停止，不创建新窗口、不自动猜测；新页创建后核对窗口归属。`background:true` 和 `focus:false` 仅为请求，不能据此声称没有抢焦点。后续 `serve`、`eval` 等仍按后台操作执行。
 
 已有本次目标页时直接复用。不要改用桌面快捷方式、系统默认浏览器或 `Start-Process chrome.exe <URL>` 打开后台网址，这些入口可能激活窗口。
 
@@ -179,7 +187,7 @@ browser-bg close --socket <socket路径>
 
 - `status` 返回页面状态、前台采样和有界脱敏诊断；不输出请求正文、完整 URL、Cookie 或令牌。HTTP 成功和请求完成不等于模型已回复。精确发送计时须另按 [skill 中的计时规则](SKILL.md#操作速度与发送计时2026-11-17) 核对真实请求及原始时间戳。
 - `tabs` 默认返回标签页 ID 和域名，不返回标题或网址路径。确需区分同域页面时，可在授权范围内使用 `tabs --details`；它额外返回标题及去除认证信息、查询参数和片段的路径，仍可能包含私人内容。非 HTTP(S) 地址只显示协议名。
-- Chrome `open` 创建正常后台页，返回新页 ID 与前台采样计数后退出；默认不返回路径、查询参数或片段。仅接受 HTTP(S) 地址（禁止内嵌账号密码），以及用于检查的 `about:blank`。Vivaldi `open` 在连接前明确拒绝；已有正常页使用 `serve`。这些命令均不提交网页内容。
+- Chrome `open` 创建正常后台页，返回新页 ID 与前台采样计数后退出；默认不返回路径、查询参数或片段。仅接受 HTTP(S) 地址（禁止内嵌账号密码），以及用于检查的 `about:blank`。Vivaldi `open` 需要显式 `--allow-activation`，只在唯一现有窗口建页，并返回 `activationMayOccur` 与窗口 ID；已有正常页继续使用 `serve`。这些命令均不提交网页内容。
 - `serve` 保持连接并返回 socket、`bridgePid`、连接状态和独立的 `interactionReady`；连接成功不代表页面可交互。默认仅显示页面域名；`--details` 可额外显示去认证路径。`eval` 执行已授权的页面 JavaScript，长表达式可用 `--file` 传入。元数据脱敏不适用于任意 `eval` 返回值；只读取本次任务必需的信息，输出及异常可能进入终端或助手会话记录。
 - `cdp` 仅转发白名单内的页面鼠标、键盘、文字输入及布局读取操作，复用现有任务连接并检查 origin；连接本身不授予网页修改权限。
 - `open` / `status` / `close` 返回前台采样计数；采样不能证明两个采样点之间绝无窗口变化，用户自己切换窗口也会计入。`open` 的采样从调试连接后开始，不覆盖之前的冷启动阶段。

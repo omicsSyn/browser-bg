@@ -52,7 +52,8 @@ def driver(args):
                            "all": getattr(args, "all", False),
                            "details": args.details,
                            "target": args.target, "list": args.command == "tabs",
-                           "openUrl": getattr(args, "url", None)})
+                           "openUrl": getattr(args, "url", None),
+                           "allowActivation": bool(getattr(args, "allow_activation", False))})
     prefix = "$config = '" + settings.replace("'", "''") + "' | ConvertFrom-Json\n"
     script = Path(__file__).resolve().with_name("windows_cdp.ps1")
     windows_script = subprocess.check_output(["wslpath", "-w", str(script)], text=True).strip()
@@ -69,11 +70,12 @@ def driver(args):
 
 
 def serve(args):
-    if args.command == "open" and args.browser == "vivaldi":
+    if (args.command == "open" and args.browser == "vivaldi"
+            and not getattr(args, "allow_activation", False)):
         raise ValueError(
-            "VIVALDI_OPEN_REQUIRES_EXISTING_TAB: Automatic new-tab creation may activate "
-            "Vivaldi; hidden pages are disabled. Use tabs then serve --target with an "
-            "authorized normal tab. If none exists, ask the user to open it manually."
+            "VIVALDI_OPEN_REQUIRES_ACTIVATION_CONSENT: Vivaldi may activate its existing "
+            "window when opening a tab. After explicit consent, use --allow-activation; "
+            "otherwise reuse an authorized existing tab. Never open another window."
         )
     process = driver(args)
     buffered = bytearray()
@@ -169,7 +171,9 @@ def main():
         if command == "tabs":
             item.add_argument("--all", action="store_true", help="List tab metadata across origins; does not attach")
         if command == "open":
-            item.add_argument("url", help="Authorized HTTP(S) URL, or about:blank; automatic creation is supported for Chrome only; use serve for existing Vivaldi tabs")
+            item.add_argument("url", help="Authorized HTTP(S) URL, or about:blank; Vivaldi opens a tab in its sole existing window")
+            item.add_argument("--allow-activation", action="store_true",
+                              help="Vivaldi only: explicit user consent for window activation while opening a new tab")
     call = commands.add_parser("eval")
     call.add_argument("--socket", required=True)
     source = call.add_mutually_exclusive_group(required=True)
@@ -192,6 +196,8 @@ def main():
         if args.port is not None and not 1 <= args.port <= 65535:
             parser.error("Port must be 1..65535")
         if args.command == "open":
+            if args.allow_activation and args.browser != "vivaldi":
+                parser.error("--allow-activation is only for Vivaldi")
             try:
                 url = urlsplit(args.url)
                 valid = (url.scheme in ("http", "https") and bool(url.hostname)

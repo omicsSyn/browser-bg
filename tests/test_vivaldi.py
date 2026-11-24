@@ -52,12 +52,54 @@ $results=@(foreach($settings in @(
 ConvertTo-Json -InputObject $results -Depth 6 -Compress
 """)
         blocked, existing, chrome = json.loads(result)
-        self.assertIn('VIVALDI_OPEN_REQUIRES_EXISTING_TAB', blocked['error'])
+        self.assertIn('VIVALDI_OPEN_REQUIRES_ACTIVATION_CONSENT', blocked['error'])
         self.assertIsNone(existing['error'])
         self.assertIsNone(chrome['error'])
         self.assertLess(source.index('AssertBackgroundOpenAllowed $config'),
                         source.index('Get-NetTCPConnection'))
         self.assertNotIn('hidden=$true', source)
+
+    def test_consent_window_selection_and_same_window_creation(self):
+        source = (ROOT / 'scripts/windows_cdp.ps1').read_text()
+        start = source.index('function AssertBackgroundOpenAllowed(')
+        functions = source[start:source.index('\ntry {', start)]
+        result = powershell(r"""
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new();$ErrorActionPreference='Stop'
+function CDP($method,$parameters,$sessionId) {
+ $script:calls+=@{method=$method;parameters=$parameters}
+ if($method -eq 'Target.createTarget'){return @{targetId='NEW'}}
+ if($parameters.targetId -eq 'SECOND'){return @{windowId=22}}
+ if($parameters.targetId -eq 'NEW' -and $script:mismatch){return @{windowId=22}}
+ return @{windowId=11}
+}
+""" + functions + r"""
+AssertBackgroundOpenAllowed @{browser='vivaldi';openUrl='https://example.invalid';allowActivation=$true}
+$script:calls=@();$script:mismatch=$false
+$one=@(@{type='page';url='https://example.invalid';targetId='FIRST'})
+$id=GetVivaldiWindowId $one
+$created=OpenVivaldiTarget 'https://example.invalid' $id
+$successCalls=@($script:calls)
+$failures=@(foreach($targets in @(@(),@($one[0],@{type='page';url='https://example.invalid';targetId='SECOND'}))){
+ $script:calls=@();$errorMessage=$null
+ try {GetVivaldiWindowId $targets|Out-Null}catch{$errorMessage=$_.Exception.Message}
+ @{error=$errorMessage;created=@($script:calls|Where-Object {$_.method -eq 'Target.createTarget'}).Count}
+})
+$script:mismatch=$true;$mismatchError=$null
+try {OpenVivaldiTarget 'https://example.invalid' 11|Out-Null}catch{$mismatchError=$_.Exception.Message}
+@{windowId=$id;target=$created.targetId;calls=$successCalls;failures=$failures;mismatch=$mismatchError}|ConvertTo-Json -Depth 8 -Compress
+""")
+        data = json.loads(result)
+        self.assertEqual(data['windowId'], 11)
+        self.assertEqual(data['target'], 'NEW')
+        create = next(c for c in data['calls'] if c['method'] == 'Target.createTarget')
+        self.assertEqual(create['parameters'], {'url': 'https://example.invalid',
+                                               'background': True, 'focus': False, 'newWindow': False})
+        self.assertEqual(len(data['failures']), 2)
+        for failure in data['failures']:
+            self.assertIn('VIVALDI_WINDOW_AMBIGUOUS', failure['error'])
+            self.assertEqual(failure['created'], 0)
+        self.assertIn('OPEN_WINDOW_MISMATCH', data['mismatch'])
+
 
     def test_cleanup_preserves_all_tabs_even_with_stale_hidden_target_state(self):
         source = (ROOT / 'scripts/windows_cdp.ps1').read_text()
@@ -95,7 +137,7 @@ ConvertTo-Json -InputObject $results -Depth 6 -Compress
                     'http://127.1/path', 'https://例子.测试/path'):
             with self.subTest(url=url), mock.patch.object(sys, 'argv', ['browser-bg', 'open', url]), \
                     mock.patch.object(bridge, 'driver') as driver:
-                with self.assertRaisesRegex(ValueError, 'VIVALDI_OPEN_REQUIRES_EXISTING_TAB'):
+                with self.assertRaisesRegex(ValueError, 'VIVALDI_OPEN_REQUIRES_ACTIVATION_CONSENT'):
                     bridge.main()
                 driver.assert_not_called()
 
@@ -112,7 +154,7 @@ ConvertTo-Json -InputObject $results -Depth 6 -Compress
                                 capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 1, result.stderr.decode('utf-8', errors='replace'))
         output = json.loads(result.stdout.decode('utf-8-sig'))
-        self.assertIn('VIVALDI_OPEN_REQUIRES_EXISTING_TAB', output['error'])
+        self.assertIn('VIVALDI_OPEN_REQUIRES_ACTIVATION_CONSENT', output['error'])
         self.assertTrue(output['fatal'])
         self.assertEqual(output['diagnostics']['recentEvents'], [])
 
@@ -171,7 +213,7 @@ for line in sys.stdin:
 
     def test_vivaldi_open_refuses_before_starting_windows_helper(self):
         with mock.patch.object(bridge, 'driver') as driver:
-            with self.assertRaisesRegex(ValueError, 'VIVALDI_OPEN_REQUIRES_EXISTING_TAB'):
+            with self.assertRaisesRegex(ValueError, 'VIVALDI_OPEN_REQUIRES_ACTIVATION_CONSENT'):
                 bridge.serve(SimpleNamespace(command='open', browser='vivaldi'))
             driver.assert_not_called()
 
@@ -181,9 +223,30 @@ for line in sys.stdin:
             with self.subTest(args=browser_args), mock.patch.object(
                     sys, 'argv', ['browser-bg', 'open', 'https://example.invalid'] + browser_args), \
                     mock.patch.object(bridge, 'driver') as driver:
-                with self.assertRaisesRegex(ValueError, 'VIVALDI_OPEN_REQUIRES_EXISTING_TAB'):
+                with self.assertRaisesRegex(ValueError, 'VIVALDI_OPEN_REQUIRES_ACTIVATION_CONSENT'):
                     bridge.main()
                 driver.assert_not_called()
+
+
+    def test_cli_activation_consent_is_explicit_and_forwarded(self):
+        with mock.patch.object(sys, 'argv', ['browser-bg', 'open', 'https://example.invalid',
+                                            '--browser', 'vivaldi', '--allow-activation']), \
+                mock.patch.object(bridge, 'serve') as serve:
+            bridge.main()
+        args = serve.call_args.args[0]
+        self.assertTrue(args.allow_activation)
+        with mock.patch.object(bridge.subprocess, 'check_output', return_value='F:\\test\\windows_cdp.ps1'), \
+                mock.patch.object(bridge.subprocess, 'Popen') as popen:
+            bridge.driver(args)
+        line = base64.b64decode(popen.call_args.args[0][-1]).decode('utf-16-le').splitlines()[0]
+        config = json.loads(line[len("$config = '"):-len("' | ConvertFrom-Json")])
+        self.assertIs(config['allowActivation'], True)
+        with mock.patch.object(sys, 'argv', ['browser-bg', 'open', 'https://example.invalid',
+                                            '--browser', 'chrome', '--allow-activation']), \
+                mock.patch.object(bridge, 'serve') as serve, mock.patch('sys.stderr'):
+            with self.assertRaises(SystemExit):
+                bridge.main()
+            serve.assert_not_called()
 
 
     def test_chrome_open_still_returns_without_a_socket(self):

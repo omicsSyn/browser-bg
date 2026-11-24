@@ -74,9 +74,30 @@ function OpenBackgroundTarget([string]$url, [bool]$needsWindow) {
     return (CDP 'Target.createTarget' $parameters $null)
 }
 function AssertBackgroundOpenAllowed($settings) {
-    if ($settings.openUrl -and $settings.browser -eq 'vivaldi') {
-        throw 'VIVALDI_OPEN_REQUIRES_EXISTING_TAB: Automatic creation may activate Vivaldi; hidden pages are disabled. Use tabs then serve --target with an authorized normal tab, or ask the user to open it manually.'
+    if ($settings.openUrl -and $settings.browser -eq 'vivaldi' -and -not $settings.allowActivation) {
+        throw 'VIVALDI_OPEN_REQUIRES_ACTIVATION_CONSENT: Vivaldi may activate its existing window when opening a tab. Obtain explicit consent and pass --allow-activation, or reuse an existing authorized tab. Do not open another window.'
     }
+}
+
+function GetVivaldiWindowId($targets) {
+    $windows = @{}
+    foreach ($item in @($targets | Where-Object {$_.type -eq 'page' -and $_.url -notlike 'chrome-extension://*'})) {
+        $info = CDP 'Browser.getWindowForTarget' @{targetId=$item.targetId} $null
+        $windows[[string]$info.windowId] = $info.windowId
+    }
+    if ($windows.Count -ne 1) {
+        throw ('VIVALDI_WINDOW_AMBIGUOUS: Expected one existing window; found ' + $windows.Count + '. Do not create a new window or choose an unrelated window.')
+    }
+    return @($windows.Values)[0]
+}
+function OpenVivaldiTarget([string]$url, [int]$windowId) {
+    # Both flags are requests, not a guarantee: this Vivaldi version still activates.
+    $created = CDP 'Target.createTarget' @{url=$url; background=$true; focus=$false; newWindow=$false} $null
+    $actual = CDP 'Browser.getWindowForTarget' @{targetId=$created.targetId} $null
+    if ($actual.windowId -ne $windowId) {
+        throw ('OPEN_WINDOW_MISMATCH: Created target ' + $created.targetId + ' is outside the expected window. Preserve it and inspect; do not replay or close it automatically.')
+    }
+    return $created
 }
 
 try {
@@ -163,12 +184,19 @@ public class BrowserFocusMonitor : IDisposable {
 '@
     $monitor = [BrowserFocusMonitor]::new([uint32]$browser.Id, $browser.MainWindowHandle)
     if ($config.openUrl) {
-        $needsWindow = $browser.MainWindowHandle -eq [IntPtr]::Zero
-        $created = OpenBackgroundTarget $config.openUrl $needsWindow
+        $expectedWindowId = $null
+        if ($config.browser -eq 'vivaldi') {
+            $expectedWindowId = GetVivaldiWindowId $all.targetInfos
+            $created = OpenVivaldiTarget $config.openUrl $expectedWindowId
+        } else {
+            $needsWindow = $browser.MainWindowHandle -eq [IntPtr]::Zero
+            $created = OpenBackgroundTarget $config.openUrl $needsWindow
+        }
         Start-Sleep -Milliseconds 500
         OutputJson @{opened=$true; target=$created.targetId; url=(SafePageUrl $config.openUrl ([bool]$config.details));
             port=$port; browser=$version.product; browserKind=$config.browser; connection=$config.connection;
-            openMethod='cdp-background'; focus=$monitor.Snapshot()}
+            openMethod=$(if ($config.browser -eq 'vivaldi') {'existing-window-tab'} else {'cdp-background'});
+            activationMayOccur=($config.browser -eq 'vivaldi'); windowId=$expectedWindowId; focus=$monitor.Snapshot()}
         exit 0
     } else {
         if ($config.target) { $matches = @($matches | Where-Object {$_.targetId -eq $config.target}) }
